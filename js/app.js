@@ -1,6 +1,25 @@
 import { TEMPLATES } from "./templates.js";
-import { saveKeys, loadKeys, testKeys, pexelsImageSearch, pexelsVideoSearch, pixabayMusicSearch, elevenLabsTTS, fetchAsBuffer, aiGenerateScript, aiImproveScript, aiGenerateStockQueries } from "./api.js";
+import { saveKeys, loadKeys, testKeys, pexelsImageSearch, pexelsVideoSearch, pixabayMusicSearch, elevenLabsTTS, fetchAsBuffer, aiGenerateScript, aiImproveScript, aiGenerateStockQueries, llmComplete } from "./api.js";
 import { compose, renderTextOverlay, renderFinalCard } from "./composer.js";
+import {
+  saveFormState, loadFormState, clearFormState,
+  dbPutUpload, dbGetAllUploads, dbClearUploads,
+  exportProjectJSON, importProjectJSON,
+  encryptKeys, decryptKeys, keysAreEncrypted,
+  saveBrand, loadBrand
+} from "./storage.js";
+
+// ─── Bitrate presets per export target ───────────────────
+const PRESETS = {
+  tiktok:   { videoBitrate: "8M",  audioBitrate: "192k", profile: "main",     fps: 30 },
+  reels:    { videoBitrate: "6M",  audioBitrate: "192k", profile: "main",     fps: 30 },
+  shorts:   { videoBitrate: "10M", audioBitrate: "192k", profile: "high",     fps: 30 },
+  linkedin: { videoBitrate: "5M",  audioBitrate: "128k", profile: "main",     fps: 30 },
+  standard: { videoBitrate: "4M",  audioBitrate: "128k", profile: "baseline", fps: 30 }
+};
+
+// iOS detection (webkitdirectory ignored, memory limits, etc.)
+const IS_IOS = /iPad|iPhone|iPod/.test(navigator.userAgent) && !window.MSStream;
 
 const $ = sel => document.querySelector(sel);
 const $$ = sel => document.querySelectorAll(sel);
@@ -15,12 +34,60 @@ const state = {
 };
 
 // ─── Init ─────────────────────────────────────────────
-window.addEventListener("DOMContentLoaded", () => {
+window.addEventListener("DOMContentLoaded", async () => {
+  initErrorHandling();
   initTabs();
   initKeysPanel();
   initBuildPanel();
+  initBrandPanel();
+  initProjectIO();
+  initKeyboardShortcuts();
+  initIOSAdjustments();
+
   applyTemplate("viral");
+  loadFormState();          // restore form fields
+  await restoreUploads();   // restore uploaded files from IndexedDB
+  updateScriptCounter();
+  registerServiceWorker();  // PWA + offline cache
 });
+
+// ─── Service Worker ───────────────────────────────────
+async function registerServiceWorker() {
+  if (!("serviceWorker" in navigator)) return;
+  try {
+    const reg = await navigator.serviceWorker.register("/sw.js", { scope: "/" });
+    console.log("SW registered:", reg.scope);
+  } catch (e) {
+    console.warn("SW registration failed:", e);
+  }
+}
+
+// ─── Global error handling ────────────────────────────
+function initErrorHandling() {
+  window.addEventListener("error", (e) => {
+    log(`❌ ${e.message} (${e.filename}:${e.lineno})`);
+  });
+  window.addEventListener("unhandledrejection", (e) => {
+    const msg = e.reason?.message || String(e.reason);
+    log(`❌ Promise unhandled: ${msg}`);
+  });
+}
+
+// ─── iOS adjustments ──────────────────────────────────
+function initIOSAdjustments() {
+  if (!IS_IOS) return;
+  // Folder picker is broken on iOS — replace with a hint
+  const folder = $("#proj-folder");
+  if (folder) {
+    folder.disabled = true;
+    folder.title = "iOS ne supporte pas l'upload de dossier";
+    const summary = $("#folder-summary");
+    if (summary) summary.textContent = "ℹ️ iOS ne supporte pas l'upload de dossier — utilise un autre device.";
+  }
+  // Cap duration to 30s on iOS to avoid OOM
+  const dur = $("#proj-duration");
+  if (dur) dur.max = "30";
+}
 
 // ─── Tabs ─────────────────────────────────────────────
 function initTabs() {
@@ -80,6 +147,46 @@ function initKeysPanel() {
     const msg = Object.entries(r).map(([k, v]) => `• ${k}: ${v === "ok" ? "✅" : "❌ " + v}`).join("\n");
     setKeyStatus(msg, ok ? "ok" : "err");
   });
+
+  // Encryption
+  refreshEncryptionStatus();
+  $("#encrypt-keys").addEventListener("click", async () => {
+    const pp = $("#passphrase").value;
+    if (!pp || pp.length < 8) { alert("Passphrase de 8+ caractères requise."); return; }
+    if (keysAreEncrypted()) { alert("Déjà chiffré. Déchiffre d'abord."); return; }
+    try {
+      await encryptKeys(pp);
+      // Clear inputs since values are now encrypted
+      ["pexels", "pixabay", "elevenlabs", "anthropic", "openai", "mistral", "openrouter"].forEach(k => $(`#key-${k}`).value = "");
+      $("#passphrase").value = "";
+      refreshEncryptionStatus();
+      alert("✅ Clés chiffrées.");
+    } catch (e) { alert("❌ " + e.message); }
+  });
+  $("#decrypt-keys").addEventListener("click", async () => {
+    const pp = $("#passphrase").value;
+    if (!pp) { alert("Passphrase requise."); return; }
+    try {
+      await decryptKeys(pp);
+      const k = loadKeys();
+      $("#key-pexels").value = k.pexels;
+      $("#key-pixabay").value = k.pixabay;
+      $("#key-elevenlabs").value = k.elevenlabs;
+      $("#key-anthropic").value = k.anthropic;
+      $("#key-openai").value = k.openai;
+      $("#key-mistral").value = k.mistral;
+      $("#key-openrouter").value = k.openrouter;
+      $("#passphrase").value = "";
+      refreshEncryptionStatus();
+      alert("✅ Clés déchiffrées.");
+    } catch (e) { alert("❌ " + e.message); }
+  });
+}
+
+function refreshEncryptionStatus() {
+  const el = $("#encryption-status");
+  if (!el) return;
+  el.textContent = keysAreEncrypted() ? "🔒 Tes clés sont chiffrées." : "🔓 Tes clés sont en clair dans localStorage.";
 }
 
 function setKeyStatus(msg, kind) {
@@ -116,6 +223,192 @@ function initBuildPanel() {
   // generate
   $("#generate").addEventListener("click", generate);
   $("#reset").addEventListener("click", () => location.reload());
+
+  // A/B hooks
+  $("#ai-hooks").addEventListener("click", generateHookVariants);
+
+  // Drag & drop on dropzone
+  initDragDrop();
+
+  // Auto-save form state on every input
+  const debouncedSave = debounce(() => {
+    saveFormState();
+    showAutoSave("💾 enregistré");
+  }, 400);
+  document.addEventListener("input", (e) => {
+    if (e.target.matches("#proj-name, #proj-lang, #proj-format, #proj-duration, #proj-pitch, #proj-script, #music-query, #voice-id, #voice-style")) {
+      debouncedSave();
+    }
+  });
+}
+
+function showAutoSave(msg) {
+  const el = $("#autosave-indicator");
+  if (!el) return;
+  el.textContent = msg;
+  clearTimeout(showAutoSave._t);
+  showAutoSave._t = setTimeout(() => { el.textContent = ""; }, 1500);
+}
+
+function debounce(fn, ms) {
+  let t;
+  return (...args) => { clearTimeout(t); t = setTimeout(() => fn(...args), ms); };
+}
+
+// ─── Drag & drop ──────────────────────────────────────
+function initDragDrop() {
+  const zone = $("#dropzone");
+  if (!zone) return;
+  ["dragenter", "dragover"].forEach(ev => {
+    zone.addEventListener(ev, (e) => { e.preventDefault(); e.stopPropagation(); zone.classList.add("dragging"); });
+  });
+  ["dragleave", "drop"].forEach(ev => {
+    zone.addEventListener(ev, (e) => { e.preventDefault(); e.stopPropagation(); zone.classList.remove("dragging"); });
+  });
+  zone.addEventListener("drop", async (e) => {
+    const files = Array.from(e.dataTransfer.files || []).filter(f => /^(image|video)\//.test(f.type));
+    if (files.length) await ingestFiles(files);
+  });
+}
+
+// ─── Keyboard shortcuts ───────────────────────────────
+function initKeyboardShortcuts() {
+  document.addEventListener("keydown", (e) => {
+    const meta = e.metaKey || e.ctrlKey;
+    if (meta && e.key.toLowerCase() === "g") {
+      e.preventDefault();
+      $("#generate").click();
+    } else if (meta && e.key.toLowerCase() === "s") {
+      e.preventDefault();
+      const saveBtn = $("#save-keys");
+      if (!document.querySelector("section.tab[data-tab='keys']").hidden) saveBtn.click();
+      else { saveFormState(); showAutoSave("💾 sauvegardé"); }
+    } else if (e.key === "Escape") {
+      const variants = $("#hooks-variants");
+      if (variants && variants.style.display !== "none") {
+        variants.style.display = "none";
+        variants.innerHTML = "";
+      }
+    }
+  });
+}
+
+// ─── Project export / import ──────────────────────────
+function initProjectIO() {
+  $("#project-export").addEventListener("click", () => {
+    const json = exportProjectJSON();
+    const name = ($("#proj-name").value.trim() || "projet").toLowerCase().replace(/\s+/g, "-");
+    const blob = new Blob([json], { type: "application/json" });
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = `${name}.montage.json`;
+    a.click();
+    URL.revokeObjectURL(a.href);
+  });
+  $("#project-import").addEventListener("click", () => $("#project-import-input").click());
+  $("#project-import-input").addEventListener("change", async (e) => {
+    const f = e.target.files?.[0];
+    if (!f) return;
+    try {
+      const text = await f.text();
+      const data = importProjectJSON(text);
+      if (data.template) applyTemplate(data.template);
+      loadFormState(); // re-read into fields
+      updateScriptCounter();
+      alert("✅ Projet importé.");
+    } catch (err) {
+      alert("❌ Fichier invalide: " + err.message);
+    }
+  });
+  $("#project-clear").addEventListener("click", async () => {
+    if (!confirm("Vider tout le projet (champs + uploads) ? Tes clés API restent.")) return;
+    clearFormState();
+    await dbClearUploads();
+    state.uploads = [];
+    state.stockResults = [];
+    state.projectDigest = "";
+    renderUploadPreview();
+    location.reload();
+  });
+}
+
+// ─── Brand kit ────────────────────────────────────────
+function initBrandPanel() {
+  const brand = loadBrand();
+  if (brand.colorPrimary) $("#brand-color-primary").value = brand.colorPrimary;
+  if (brand.colorBg) $("#brand-color-bg").value = brand.colorBg;
+  if (brand.logoDataURL) {
+    $("#brand-logo-preview").innerHTML = `<img src="${brand.logoDataURL}" style="max-height:80px;background:#fff;padding:4px;border-radius:4px">`;
+  }
+
+  $("#brand-logo").addEventListener("change", async (e) => {
+    const f = e.target.files?.[0];
+    if (!f) return;
+    if (f.size > 2 * 1024 * 1024) { alert("Logo trop gros (max 2 Mo)."); return; }
+    const dataURL = await new Promise((resolve, reject) => {
+      const r = new FileReader();
+      r.onload = () => resolve(r.result);
+      r.onerror = reject;
+      r.readAsDataURL(f);
+    });
+    const b = loadBrand();
+    b.logoDataURL = dataURL;
+    saveBrand(b);
+    $("#brand-logo-preview").innerHTML = `<img src="${dataURL}" style="max-height:80px;background:#fff;padding:4px;border-radius:4px">`;
+  });
+
+  $("#brand-save").addEventListener("click", () => {
+    const b = loadBrand();
+    b.colorPrimary = $("#brand-color-primary").value;
+    b.colorBg = $("#brand-color-bg").value;
+    saveBrand(b);
+    alert("✅ Brand kit enregistré.");
+  });
+  $("#brand-clear").addEventListener("click", () => {
+    if (!confirm("Reset brand kit ?")) return;
+    saveBrand({});
+    $("#brand-color-primary").value = "#ffb300";
+    $("#brand-color-bg").value = "#0a0a0c";
+    $("#brand-logo-preview").innerHTML = "";
+    $("#brand-logo").value = "";
+  });
+}
+
+// ─── A/B hook variants ────────────────────────────────
+async function generateHookVariants() {
+  const status = $("#ai-status");
+  const pitch = $("#proj-pitch").value.trim() || $("#proj-name").value.trim();
+  const lang = $("#proj-lang").value;
+  if (!pitch) { alert("Renseigne un pitch ou nom de projet."); return; }
+  status.textContent = "⏳ génération 3 hooks…";
+  try {
+    const out = await llmComplete({
+      system: `Tu génères 3 hooks d'accroche pour une pub vidéo verticale en ${lang === "fr" ? "français" : "english"}. Chaque hook = UNE phrase courte (max 8 mots), punchy. Format: une ligne par hook, rien d'autre.`,
+      user: `Pitch: ${pitch}${state.projectDigest ? `\n\nContexte projet:\n<project>\n${state.projectDigest.slice(0, 8000)}\n</project>` : ""}\n\nGénère 3 hooks différents (intrigue, douleur, CTA direct).`,
+      maxTokens: 200,
+      temperature: 0.95
+    });
+    const hooks = out.split("\n").map(l => l.replace(/^[-\d.\s)]+/, "").trim()).filter(Boolean).slice(0, 3);
+    const container = $("#hooks-variants");
+    container.style.display = "flex";
+    container.innerHTML = hooks.map((h, i) =>
+      `<button class="secondary" data-hook="${encodeURIComponent(h)}" type="button" style="text-align:left">🎯 ${i + 1}. ${h}</button>`
+    ).join("");
+    container.querySelectorAll("button").forEach(b => {
+      b.addEventListener("click", () => {
+        const hook = decodeURIComponent(b.dataset.hook);
+        const lines = $("#proj-script").value.split("\n");
+        lines[0] = hook;
+        $("#proj-script").value = lines.join("\n");
+        updateScriptCounter();
+        container.style.display = "none";
+        container.innerHTML = "";
+      });
+    });
+    status.textContent = `✨ 3 hooks générés — clique pour utiliser`;
+  } catch (e) {
+    status.textContent = `❌ ${e.message}`;
+  }
 }
 
 // ─── Project folder digest ────────────────────────────
@@ -295,16 +588,39 @@ function updateScriptCounter() {
 // ─── Uploads ──────────────────────────────────────────
 async function handleUpload(e) {
   const files = Array.from(e.target.files || []);
+  await ingestFiles(files);
+}
+
+async function ingestFiles(files) {
   for (const f of files) {
     const buf = await f.arrayBuffer();
-    state.uploads.push({
-      name: f.name,
-      type: f.type.startsWith("video/") ? "video" : "image",
-      buf,
-      url: URL.createObjectURL(f)
-    });
+    const type = f.type.startsWith("video/") ? "video" : "image";
+    const blob = new Blob([buf], { type: f.type });
+    const url = URL.createObjectURL(blob);
+    const upload = { name: f.name, type, buf, url, mimeType: f.type };
+    state.uploads.push(upload);
+    // Persist to IndexedDB so reload doesn't lose them
+    try {
+      await dbPutUpload({ name: f.name, type, mimeType: f.type, blob });
+    } catch (err) {
+      console.warn("IDB save failed:", err);
+    }
   }
   renderUploadPreview();
+}
+
+async function restoreUploads() {
+  try {
+    const records = await dbGetAllUploads();
+    for (const r of records) {
+      const buf = await r.blob.arrayBuffer();
+      const url = URL.createObjectURL(r.blob);
+      state.uploads.push({ name: r.name, type: r.type, buf, url, mimeType: r.mimeType });
+    }
+    if (records.length) renderUploadPreview();
+  } catch (e) {
+    console.warn("restoreUploads failed:", e);
+  }
 }
 
 function renderUploadPreview() {
@@ -392,34 +708,30 @@ async function generate() {
     const visualDur = (totalDuration - logoDur) / N_visual;
     setProgress(10, `Plan: ${N_visual} scènes × ${visualDur.toFixed(1)}s + logo card`);
 
-    // Generate narration
-    let narrationBuf = null;
-    if (useVoice) {
-      log("🎙 Génération voix off…");
-      setProgress(15, "Génération voix off (ElevenLabs)…");
-      const fullText = scriptLines.join(" ");
-      narrationBuf = await elevenLabsTTS(fullText, { voiceId, style: voiceStyle });
-      log(`✓ voix off ${(narrationBuf.byteLength / 1024).toFixed(1)} Ko`);
-    }
+    // Run TTS + music search in parallel — ~2× faster than sequential
+    setProgress(15, "Voix off + musique en parallèle…");
+    const ttsPromise = useVoice
+      ? elevenLabsTTS(scriptLines.join(" "), { voiceId, style: voiceStyle })
+          .then(buf => { log(`✓ voix off ${(buf.byteLength / 1024).toFixed(1)} Ko`); return buf; })
+          .catch(e => { log(`⚠ voix off: ${e.message}`); return null; })
+      : Promise.resolve(null);
 
-    // Music
-    let musicBuf = null;
     const musicQuery = $("#music-query").value.trim();
-    if (musicQuery) {
-      log(`🎵 Recherche musique: "${musicQuery}"`);
-      setProgress(25, "Recherche musique…");
-      try {
-        const track = await pixabayMusicSearch(musicQuery, { minDur: totalDuration, maxDur: 90 });
-        if (track && track.audio) {
-          musicBuf = await fetchAsBuffer(track.audio);
-          log(`✓ musique: ${track.title || "track"}`);
-        } else {
-          log("⚠ pas de musique trouvée — pub sans musique");
-        }
-      } catch (e) {
-        log(`⚠ musique: ${e.message}`);
-      }
-    }
+    const musicPromise = musicQuery
+      ? pixabayMusicSearch(musicQuery, { minDur: totalDuration, maxDur: 90 })
+          .then(async track => {
+            if (track && track.audio) {
+              const buf = await fetchAsBuffer(track.audio);
+              log(`✓ musique: ${track.title || "track"}`);
+              return buf;
+            }
+            log("⚠ pas de musique trouvée — pub sans musique");
+            return null;
+          })
+          .catch(e => { log(`⚠ musique: ${e.message}`); return null; })
+      : Promise.resolve(null);
+
+    const [narrationBuf, musicBuf] = await Promise.all([ttsPromise, musicPromise]);
 
     // Build scenes data
     setProgress(35, "Préparation scènes…");
@@ -437,12 +749,16 @@ async function generate() {
       });
     }
 
-    // Final logo card scene
-    const logoCardURL = renderFinalCard({
+    // Final logo card scene — uses brand kit colors/logo if set
+    const brand = loadBrand();
+    const logoCardURL = await renderFinalCard({
       width: W, height: H,
       title: projName,
       subtitle: lang === "fr" ? "Disponible maintenant" : "Available now",
-      cta: lang === "fr" ? "  7 JOURS GRATUIT  " : "  7 DAYS FREE  "
+      cta: lang === "fr" ? "  7 JOURS GRATUIT  " : "  7 DAYS FREE  ",
+      colorPrimary: brand.colorPrimary,
+      colorBg: brand.colorBg,
+      logoDataURL: brand.logoDataURL
     });
     // Convert dataURL to buffer for use as image input
     const logoBuf = dataURLToArrayBuffer(logoCardURL);
@@ -454,15 +770,19 @@ async function generate() {
     });
 
     // Compose
+    const presetKey = $("#proj-preset").value || "tiktok";
+    const preset = PRESETS[presetKey] || PRESETS.tiktok;
     setProgress(40, "🎬 Composition vidéo (peut prendre 1-2 min)…");
-    log("📥 Chargement ffmpeg.wasm…");
+    log(`📥 Chargement ffmpeg.wasm… (preset: ${presetKey})`);
     const blob = await compose({
       scenes,
       narrationBuf,
       musicBuf,
       format,
       totalDuration,
-      onLog: m => log(m)
+      preset,
+      onLog: m => log(m),
+      onLoadProgress: p => setProgress(40 + Math.round(p * 20), `📥 Téléchargement ffmpeg.wasm… ${(p * 100).toFixed(0)}%`)
     });
 
     setProgress(100, "✅ Terminé !");

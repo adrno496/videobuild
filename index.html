@@ -3,7 +3,11 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="theme-color" content="#ffb300">
+<meta name="description" content="Crée des pubs vidéo verticales en 1 clic, 100% navigateur (ffmpeg.wasm)">
 <title>MontageAI — Pub vidéo en 1 clic</title>
+<link rel="manifest" href="/manifest.webmanifest">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'><text y='52' font-size='52'>⚡</text></svg>">
 <link rel="stylesheet" href="css/style.css">
 </head>
 <body>
@@ -81,12 +85,56 @@
 
     <button id="save-keys" class="primary">💾 Enregistrer</button>
     <button id="test-keys" class="secondary">🧪 Tester les clés</button>
-    <div id="keys-status"></div>
+    <div id="keys-status" role="status" aria-live="polite"></div>
+
+    <h2 style="margin-top:32px">🔒 Sécurité (optionnel)</h2>
+    <p class="muted">Chiffre tes clés API avec une passphrase (AES-GCM). Tu devras la retaper à chaque ouverture.</p>
+    <div class="card">
+      <div class="row">
+        <div class="col">
+          <label>Passphrase</label>
+          <input id="passphrase" type="password" placeholder="min 8 caractères" autocomplete="new-password">
+        </div>
+        <div class="col" style="align-self:end">
+          <button id="encrypt-keys" class="secondary" type="button">🔒 Chiffrer</button>
+          <button id="decrypt-keys" class="secondary" type="button">🔓 Déchiffrer</button>
+        </div>
+      </div>
+      <small id="encryption-status"></small>
+    </div>
+
+    <h2 style="margin-top:32px">🎨 Brand kit</h2>
+    <p class="muted">Logo + couleurs réutilisés sur la carte finale.</p>
+    <div class="card">
+      <label>Logo (PNG/SVG, transparent recommandé)</label>
+      <input id="brand-logo" type="file" accept="image/*">
+      <div id="brand-logo-preview" style="margin-top:8px"></div>
+      <div class="row" style="margin-top:12px">
+        <div class="col">
+          <label>Couleur principale</label>
+          <input id="brand-color-primary" type="color" value="#ffb300">
+        </div>
+        <div class="col">
+          <label>Couleur fond</label>
+          <input id="brand-color-bg" type="color" value="#0a0a0c">
+        </div>
+      </div>
+      <button id="brand-save" class="secondary" type="button">💾 Enregistrer brand</button>
+      <button id="brand-clear" class="secondary" type="button">🗑️ Reset</button>
+    </div>
   </section>
 
   <!-- ═══ TAB: BUILD ═══ -->
   <section class="tab" data-tab="build">
     <h1>🎬 Crée ta pub en 6 étapes</h1>
+
+    <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:16px">
+      <button id="project-export" class="secondary" type="button" title="Exporter ce projet en .montage.json">💾 Exporter projet</button>
+      <button id="project-import" class="secondary" type="button" title="Importer un .montage.json">📂 Importer projet</button>
+      <input id="project-import-input" type="file" accept=".json,.montage" hidden>
+      <button id="project-clear" class="secondary" type="button" title="Vider tout (uploads + champs)">🗑️ Vider</button>
+      <span id="autosave-indicator" class="muted" style="align-self:center"></span>
+    </div>
 
     <!-- Step 1: project info -->
     <div class="step card">
@@ -116,6 +164,18 @@
         <div class="col">
           <label>Durée totale (s)</label>
           <input id="proj-duration" type="number" min="10" max="60" value="25">
+        </div>
+      </div>
+      <div class="row">
+        <div class="col">
+          <label>Preset export (qualité/bitrate)</label>
+          <select id="proj-preset">
+            <option value="tiktok">TikTok (1080p, 8 Mbps, h264)</option>
+            <option value="reels">Reels (1080p, 6 Mbps, h264)</option>
+            <option value="shorts">YouTube Shorts (1080p, 10 Mbps, h264)</option>
+            <option value="linkedin">LinkedIn (1080p, 5 Mbps, h264)</option>
+            <option value="standard">Standard (1080p, 4 Mbps)</option>
+          </select>
         </div>
       </div>
     </div>
@@ -157,7 +217,9 @@
       <div style="display:flex;gap:8px;margin:12px 0;flex-wrap:wrap">
         <button id="ai-script" class="secondary" type="button">✨ Générer script (IA)</button>
         <button id="ai-improve" class="secondary" type="button">✨ Améliorer script existant</button>
+        <button id="ai-hooks" class="secondary" type="button" title="Génère 3 variations du 1er hook">🎯 3 hooks A/B</button>
       </div>
+      <div id="hooks-variants" style="display:none;flex-direction:column;gap:8px;margin-bottom:12px"></div>
       <textarea id="proj-script" rows="8" placeholder="Ligne 1 = scène 1
 Ligne 2 = scène 2
 ..."></textarea>
@@ -173,8 +235,11 @@ Ligne 2 = scène 2
       </div>
 
       <div class="tab-content" data-vis="upload">
-        <input id="upload-images" type="file" accept="image/*,video/*" multiple>
-        <div id="upload-preview" class="preview-grid"></div>
+        <div id="dropzone" class="dropzone">
+          <p>📤 Glisse-dépose tes fichiers ici ou</p>
+          <input id="upload-images" type="file" accept="image/*,video/*" multiple aria-label="Uploader images ou vidéos">
+        </div>
+        <div id="upload-preview" class="preview-grid" role="list"></div>
       </div>
 
       <div class="tab-content" data-vis="stock" hidden>
@@ -217,9 +282,9 @@ Ligne 2 = scène 2
 
     <!-- Step 6: generate -->
     <div class="step card">
-      <h2><span class="step-num">6</span> Générer</h2>
-      <button id="generate" class="primary big">🎬 Générer la vidéo</button>
-      <div id="progress" class="progress" hidden>
+      <h2><span class="step-num">6</span> Générer <small style="font-weight:400;color:var(--muted)">— ⌘/Ctrl+G</small></h2>
+      <button id="generate" class="primary big" aria-keyshortcuts="Control+G">🎬 Générer la vidéo</button>
+      <div id="progress" class="progress" hidden role="status" aria-live="polite">
         <div class="progress-bar"><div id="progress-fill"></div></div>
         <p id="progress-text">Préparation…</p>
         <pre id="progress-log"></pre>

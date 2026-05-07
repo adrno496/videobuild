@@ -165,3 +165,35 @@ footer p { font-size: 13px; }
 ol, ul { padding-left: 24px; margin-bottom: 16px; }
 li { margin-bottom: 8px; }
 a { color: var(--primary); }
+
+/* Drag & drop zone */
+.dropzone {
+  border: 2px dashed var(--border);
+  border-radius: 12px;
+  padding: 24px;
+  text-align: center;
+  transition: border-color 0.15s, background 0.15s;
+  margin-bottom: 12px;
+}
+.dropzone p { color: var(--muted); margin-bottom: 8px; font-size: 14px; }
+.dropzone.dragging { border-color: var(--primary); background: rgba(255, 179, 0, 0.05); }
+
+/* A11y: visible focus on all interactive elements */
+:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; border-radius: 4px; }
+button:focus-visible, .primary:focus-visible, .secondary:focus-visible { outline-offset: 3px; }
+
+/* Reduced motion */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+/* PWA standalone safe area */
+@media (display-mode: standalone) {
+  header { padding-top: env(safe-area-inset-top, 16px); }
+  body { padding-bottom: env(safe-area-inset-bottom, 0); }
+}

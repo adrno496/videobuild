@@ -1,13 +1,21 @@
 // API clients for Pexels, Pixabay, ElevenLabs — all browser-side, CORS-friendly
 
+// Encrypted keys (stored as "ENC:..." after passphrase encryption) are returned
+// as "" — caller will see the standard "missing key" error. User must decrypt
+// in the Keys tab before calling APIs.
+const _get = (k) => {
+  const v = localStorage.getItem(k);
+  if (!v || v.startsWith("ENC:")) return "";
+  return v;
+};
 const KEYS = {
-  pexels: () => localStorage.getItem("key_pexels") || "",
-  pixabay: () => localStorage.getItem("key_pixabay") || "",
-  elevenlabs: () => localStorage.getItem("key_elevenlabs") || "",
-  anthropic: () => localStorage.getItem("key_anthropic") || "",
-  openai: () => localStorage.getItem("key_openai") || "",
-  mistral: () => localStorage.getItem("key_mistral") || "",
-  openrouter: () => localStorage.getItem("key_openrouter") || "",
+  pexels: () => _get("key_pexels"),
+  pixabay: () => _get("key_pixabay"),
+  elevenlabs: () => _get("key_elevenlabs"),
+  anthropic: () => _get("key_anthropic"),
+  openai: () => _get("key_openai"),
+  mistral: () => _get("key_mistral"),
+  openrouter: () => _get("key_openrouter"),
   llmProvider: () => localStorage.getItem("llm_provider") || "anthropic"
 };
 

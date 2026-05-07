@@ -4,9 +4,36 @@
 let ffmpeg = null;
 let ffmpegLoaded = false;
 
-// All ffmpeg.wasm assets are self-hosted under /vendor/ffmpeg/ to avoid
-// cross-origin import issues under COEP and to keep the site fully offline-capable.
-const FFMPEG_BASE = "/vendor/ffmpeg";
+// All ffmpeg.wasm assets are self-hosted to avoid cross-origin import issues
+// under COEP and to keep the site fully offline-capable (cached by SW).
+const FFMPEG_ST = "/vendor/ffmpeg";
+const FFMPEG_MT = "/vendor/ffmpeg-mt";
+
+// Stream-fetch with progress callback. Returns ArrayBuffer.
+async function fetchWithProgress(url, onProgress) {
+  const res = await fetch(url);
+  if (!res.ok) throw new Error(`fetch ${url}: ${res.status}`);
+  const total = +res.headers.get("content-length") || 0;
+  if (!res.body || !total) return res.arrayBuffer();
+  const reader = res.body.getReader();
+  const chunks = [];
+  let received = 0;
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    chunks.push(value);
+    received += value.length;
+    if (onProgress) onProgress(received, total);
+  }
+  const out = new Uint8Array(received);
+  let off = 0;
+  for (const c of chunks) { out.set(c, off); off += c.length; }
+  return out.buffer;
+}
+
+async function arrayBufferToBlobURL(buf, mime) {
+  return URL.createObjectURL(new Blob([buf], { type: mime }));
+}
 
 function dimsForFormat(format) {
   switch (format) {
@@ -17,7 +44,7 @@ function dimsForFormat(format) {
   }
 }
 
-export async function loadFFmpeg(onLog) {
+export async function loadFFmpeg(onLog, onLoadProgress) {
   if (ffmpegLoaded) return ffmpeg;
   const { FFmpeg } = window.FFmpegWASM;
   ffmpeg = new FFmpeg();
@@ -25,22 +52,45 @@ export async function loadFFmpeg(onLog) {
     ffmpeg.on("log", ({ message }) => onLog(message));
     ffmpeg.on("progress", ({ progress }) => onLog(`progress: ${(progress * 100).toFixed(0)}%`));
   }
-  const fmtErr = (e) => {
-    if (!e) return "unknown error";
-    if (typeof e === "string") return e;
-    return e.message || e.name || JSON.stringify(e).slice(0, 200) || "unknown error";
-  };
+  const fmtErr = (e) => e ? (typeof e === "string" ? e : (e.message || e.name || JSON.stringify(e).slice(0, 200))) : "unknown error";
 
-  // Self-hosted single-thread core. Same-origin → no CORS/COEP issues.
-  // The class-worker (`814.ffmpeg.js`) is also same-origin so the FFmpeg class
-  // can spawn it directly without needing classWorkerURL gymnastics.
+  // Multi-thread requires crossOriginIsolated (COOP/COEP headers must be live).
+  const canMT = typeof crossOriginIsolated !== "undefined" && crossOriginIsolated;
+  const base = canMT ? FFMPEG_MT : FFMPEG_ST;
+  if (onLog) onLog(`ffmpeg base=${base} (MT=${canMT})`);
+
+  // Stream-download wasm with byte-level progress (32MB → noticeable on 4G).
+  // We pass blob URLs so we can show progress; subsequent visits hit the SW cache.
   try {
-    await ffmpeg.load({
-      coreURL: `${FFMPEG_BASE}/ffmpeg-core.js`,
-      wasmURL: `${FFMPEG_BASE}/ffmpeg-core.wasm`
+    const wasmBuf = await fetchWithProgress(`${base}/ffmpeg-core.wasm`, (rcv, tot) => {
+      if (onLoadProgress) onLoadProgress(rcv / tot);
     });
+    const opts = {
+      coreURL: `${base}/ffmpeg-core.js`,
+      wasmURL: await arrayBufferToBlobURL(wasmBuf, "application/wasm")
+    };
+    if (canMT) opts.workerURL = `${base}/ffmpeg-core.worker.js`;
+    await ffmpeg.load(opts);
   } catch (e) {
-    throw new Error(`ffmpeg.wasm load failed: ${fmtErr(e)}`);
+    if (canMT) {
+      // MT failed — reset and try ST
+      if (onLog) onLog(`MT load failed (${fmtErr(e)}), falling back to ST`);
+      ffmpeg = new FFmpeg();
+      if (onLog) {
+        ffmpeg.on("log", ({ message }) => onLog(message));
+        ffmpeg.on("progress", ({ progress }) => onLog(`progress: ${(progress * 100).toFixed(0)}%`));
+      }
+      try {
+        await ffmpeg.load({
+          coreURL: `${FFMPEG_ST}/ffmpeg-core.js`,
+          wasmURL: `${FFMPEG_ST}/ffmpeg-core.wasm`
+        });
+      } catch (e2) {
+        throw new Error(`ffmpeg ST fallback failed: ${fmtErr(e2)}`);
+      }
+    } else {
+      throw new Error(`ffmpeg load failed: ${fmtErr(e)}`);
+    }
   }
   ffmpegLoaded = true;
   return ffmpeg;
@@ -92,36 +142,33 @@ export function renderTextOverlay({ width, height, text, subtext = null, theme =
   return cv.toDataURL("image/png");
 }
 
-// Logo / final card
-export function renderFinalCard({ width, height, title, subtitle = "", cta = "" }) {
+// Logo / final card. Accepts brand kit overrides.
+export function renderFinalCard({ width, height, title, subtitle = "", cta = "", colorPrimary = "#ffb300", colorBg = "#0a0a0c", logoDataURL = null }) {
   const cv = document.createElement("canvas");
   cv.width = width;
   cv.height = height;
   const ctx = cv.getContext("2d");
-  // bg gradient
+  // bg gradient (uses brand bg)
   const g = ctx.createRadialGradient(width / 2, height / 2, 0, width / 2, height / 2, width * 0.7);
-  g.addColorStop(0, "#3a1212");
-  g.addColorStop(1, "#0a0a0c");
+  g.addColorStop(0, mixHex(colorBg, "#ffffff", 0.12));
+  g.addColorStop(1, colorBg);
   ctx.fillStyle = g;
   ctx.fillRect(0, 0, width, height);
   // title
-  ctx.fillStyle = "#ffb300";
+  ctx.fillStyle = colorPrimary;
   ctx.textAlign = "center";
   ctx.textBaseline = "middle";
   let fontSize = Math.floor(width * 0.13);
   ctx.font = `900 ${fontSize}px -apple-system, "SF Pro Display", "Helvetica Neue", Arial, sans-serif`;
-  // shadow
   ctx.shadowColor = "rgba(0,0,0,0.8)";
   ctx.shadowBlur = 16;
   ctx.fillText(title.toUpperCase(), width / 2, height / 2 - height * 0.08);
   ctx.shadowBlur = 0;
-  // subtitle
   if (subtitle) {
     ctx.fillStyle = "#fff";
     ctx.font = `500 ${Math.floor(fontSize * 0.35)}px -apple-system, sans-serif`;
     ctx.fillText(subtitle, width / 2, height / 2 + height * 0.02);
   }
-  // CTA pill
   if (cta) {
     const padX = width * 0.06;
     const padY = height * 0.012;
@@ -131,7 +178,7 @@ export function renderFinalCard({ width, height, title, subtitle = "", cta = "" 
     const h = Math.floor(fontSize * 0.36) + padY * 2;
     const x = (width - w) / 2;
     const y = height / 2 + height * 0.10;
-    ctx.fillStyle = "#ffb300";
+    ctx.fillStyle = colorPrimary;
     ctx.beginPath();
     if (ctx.roundRect) ctx.roundRect(x, y, w, h, h / 2);
     else ctx.rect(x, y, w, h);
@@ -139,7 +186,33 @@ export function renderFinalCard({ width, height, title, subtitle = "", cta = "" 
     ctx.fillStyle = "#000";
     ctx.fillText(cta, width / 2, y + h / 2);
   }
+  // Logo top-center
+  if (logoDataURL) {
+    return new Promise((resolve) => {
+      const img = new Image();
+      img.onload = () => {
+        const targetH = height * 0.10;
+        const ratio = targetH / img.height;
+        const w = img.width * ratio;
+        ctx.drawImage(img, (width - w) / 2, height * 0.10, w, targetH);
+        resolve(cv.toDataURL("image/png"));
+      };
+      img.onerror = () => resolve(cv.toDataURL("image/png"));
+      img.src = logoDataURL;
+    });
+  }
   return cv.toDataURL("image/png");
+}
+
+function mixHex(a, b, t) {
+  const pa = parseInt(a.replace("#", ""), 16);
+  const pb = parseInt(b.replace("#", ""), 16);
+  const ar = (pa >> 16) & 0xff, ag = (pa >> 8) & 0xff, ab = pa & 0xff;
+  const br = (pb >> 16) & 0xff, bg = (pb >> 8) & 0xff, bb = pb & 0xff;
+  const r = Math.round(ar + (br - ar) * t);
+  const g = Math.round(ag + (bg - ag) * t);
+  const c = Math.round(ab + (bb - ab) * t);
+  return "#" + ((1 << 24) + (r << 16) + (g << 8) + c).toString(16).slice(1);
 }
 
 // Convert dataURL → ArrayBuffer
@@ -163,11 +236,13 @@ export async function compose({
   musicBuf,
   format = "9:16",
   totalDuration,
-  onLog
+  preset = { videoBitrate: "8M", audioBitrate: "192k", profile: "main", fps: 30 },
+  onLog,
+  onLoadProgress
 }) {
-  const ff = await loadFFmpeg(onLog);
+  const ff = await loadFFmpeg(onLog, onLoadProgress);
   const [W, H] = dimsForFormat(format);
-  const FPS = 30;
+  const FPS = preset.fps || 30;
 
   // Write per-scene clips to virtual FS, then concat
   const clipFiles = [];
@@ -198,7 +273,7 @@ export async function compose({
       }
       args = ["-ss", "0", "-t", String(dur), "-i", inputName];
       if (overlayName) args.push("-loop", "1", "-t", String(dur), "-i", overlayName);
-      args.push("-filter_complex", filter, "-an", "-c:v", "libx264", "-pix_fmt", "yuv420p", "-r", String(FPS), "-t", String(dur), outName);
+      args.push("-filter_complex", filter, "-an", "-c:v", "libx264", "-profile:v", preset.profile || "main", "-b:v", preset.videoBitrate || "8M", "-pix_fmt", "yuv420p", "-r", String(FPS), "-t", String(dur), outName);
     } else {
       // Image with Ken Burns zoom
       filter = `[0:v]scale=${W}:-1:force_original_aspect_ratio=increase,scale=${W}:${H}:force_original_aspect_ratio=increase,crop=${W}:${H},zoompan=z='min(zoom+0.0015,1.10)':d=${frames}:s=${W}x${H}:fps=${FPS},eq=brightness=0.02:contrast=1.08:saturation=1.05`;
@@ -207,7 +282,7 @@ export async function compose({
       }
       args = ["-loop", "1", "-t", String(dur), "-i", inputName];
       if (overlayName) args.push("-loop", "1", "-t", String(dur), "-i", overlayName);
-      args.push("-filter_complex", filter, "-c:v", "libx264", "-pix_fmt", "yuv420p", "-r", String(FPS), "-t", String(dur), outName);
+      args.push("-filter_complex", filter, "-c:v", "libx264", "-profile:v", preset.profile || "main", "-b:v", preset.videoBitrate || "8M", "-pix_fmt", "yuv420p", "-r", String(FPS), "-t", String(dur), outName);
     }
 
     if (onLog) onLog(`▶ scene ${idx}: ${s.visualType}, ${dur}s`);
@@ -259,7 +334,7 @@ export async function compose({
       "-filter_complex", filter,
       "-map", "[aout]",
       "-t", String(totalDuration),
-      "-c:a", "aac", "-b:a", "192k",
+      "-c:a", "aac", "-b:a", preset.audioBitrate || "192k",
       "audio.m4a"
     ]);
     hasAudio = true;
