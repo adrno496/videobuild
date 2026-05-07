@@ -4,8 +4,9 @@
 let ffmpeg = null;
 let ffmpegLoaded = false;
 
-const FFMPEG_BASE = "https://unpkg.com/@ffmpeg/core-mt@0.12.6/dist/umd";
-const FFMPEG_BASE_FALLBACK = "https://unpkg.com/@ffmpeg/core@0.12.6/dist/umd";
+// All ffmpeg.wasm assets are self-hosted under /vendor/ffmpeg/ to avoid
+// cross-origin import issues under COEP and to keep the site fully offline-capable.
+const FFMPEG_BASE = "/vendor/ffmpeg";
 
 function dimsForFormat(format) {
   switch (format) {
@@ -19,53 +20,24 @@ function dimsForFormat(format) {
 export async function loadFFmpeg(onLog) {
   if (ffmpegLoaded) return ffmpeg;
   const { FFmpeg } = window.FFmpegWASM;
-  const { toBlobURL } = window.FFmpegUtil;
   ffmpeg = new FFmpeg();
   if (onLog) {
     ffmpeg.on("log", ({ message }) => onLog(message));
     ffmpeg.on("progress", ({ progress }) => onLog(`progress: ${(progress * 100).toFixed(0)}%`));
   }
-  // The class-worker (spawned by FFmpeg JS class itself) must be same-origin under COEP.
-  // We turn the UMD chunk into a blob URL so it loads from blob: scheme.
-  const FFMPEG_PKG = "https://unpkg.com/@ffmpeg/ffmpeg@0.12.10/dist/umd";
-  const classWorkerURL = await toBlobURL(`${FFMPEG_PKG}/814.ffmpeg.js`, "text/javascript");
-
   const fmtErr = (e) => {
     if (!e) return "unknown error";
     if (typeof e === "string") return e;
     return e.message || e.name || JSON.stringify(e).slice(0, 200) || "unknown error";
   };
 
-  // Multi-thread requires crossOriginIsolated (COOP/COEP headers must be live).
-  const canMT = typeof crossOriginIsolated !== "undefined" && crossOriginIsolated;
-  if (onLog) onLog(`crossOriginIsolated=${canMT}`);
-
-  if (canMT) {
-    try {
-      await ffmpeg.load({
-        classWorkerURL,
-        coreURL: await toBlobURL(`${FFMPEG_BASE}/ffmpeg-core.js`, "text/javascript"),
-        wasmURL: await toBlobURL(`${FFMPEG_BASE}/ffmpeg-core.wasm`, "application/wasm"),
-        workerURL: await toBlobURL(`${FFMPEG_BASE}/ffmpeg-core.worker.js`, "text/javascript")
-      });
-      ffmpegLoaded = true;
-      return ffmpeg;
-    } catch (e) {
-      if (onLog) onLog(`mt failed (${fmtErr(e)}), trying single-thread`);
-      // Reset instance — a failed load() leaves ffmpeg in a bad state.
-      ffmpeg = new FFmpeg();
-      if (onLog) {
-        ffmpeg.on("log", ({ message }) => onLog(message));
-        ffmpeg.on("progress", ({ progress }) => onLog(`progress: ${(progress * 100).toFixed(0)}%`));
-      }
-    }
-  }
-
+  // Self-hosted single-thread core. Same-origin → no CORS/COEP issues.
+  // The class-worker (`814.ffmpeg.js`) is also same-origin so the FFmpeg class
+  // can spawn it directly without needing classWorkerURL gymnastics.
   try {
     await ffmpeg.load({
-      classWorkerURL,
-      coreURL: await toBlobURL(`${FFMPEG_BASE_FALLBACK}/ffmpeg-core.js`, "text/javascript"),
-      wasmURL: await toBlobURL(`${FFMPEG_BASE_FALLBACK}/ffmpeg-core.wasm`, "application/wasm")
+      coreURL: `${FFMPEG_BASE}/ffmpeg-core.js`,
+      wasmURL: `${FFMPEG_BASE}/ffmpeg-core.wasm`
     });
   } catch (e) {
     throw new Error(`ffmpeg.wasm load failed: ${fmtErr(e)}`);
