@@ -242,27 +242,33 @@ async function openAICompatible(url, key, model, { system, user, maxTokens, temp
 }
 
 // High-level helpers used by the UI
-export async function aiGenerateScript({ pitch, lang, template, duration }) {
+function projectContextBlock(digest) {
+  if (!digest) return "";
+  return `\n\nContexte du projet (extraits du dossier de l'app — utilise-le pour comprendre le produit, ses features, son ton, son public) :\n<project>\n${digest}\n</project>\n`;
+}
+
+export async function aiGenerateScript({ pitch, lang, template, duration, projectDigest }) {
   const tone = template === "viral" ? "punchy, fast-cut, hook → features → CTA"
     : template === "pov" ? "POV cinématique, posé, story-driven, métaphorique"
     : template === "asmr" ? "minimal, descriptif visuel, peu de texte"
     : "direct, sans bullshit";
   const system = `Tu es un copywriter spécialiste de pubs courtes pour réseaux sociaux. Tu écris en ${lang === "fr" ? "français" : "english"}, ton: ${tone}. UNE phrase courte par ligne (max 8 mots). Pas de hashtags, pas d'emoji, pas de numérotation. Juste le script brut, ligne par ligne.`;
-  const user = `Pitch: ${pitch}\nDurée cible: ${duration}s (~${Math.max(5, Math.round(duration / 3.5))} lignes).\nÉcris UNIQUEMENT le script, une phrase par ligne.`;
-  const out = await llmComplete({ system, user, maxTokens: 400, temperature: 0.85 });
+  const user = `Pitch: ${pitch || "(à déduire du projet)"}\nDurée cible: ${duration}s (~${Math.max(5, Math.round(duration / 3.5))} lignes).${projectContextBlock(projectDigest)}\nÉcris UNIQUEMENT le script, une phrase par ligne.`;
+  const out = await llmComplete({ system, user, maxTokens: 500, temperature: 0.85 });
   return out.split("\n").map(l => l.replace(/^[-\d.\s)]+/, "").trim()).filter(Boolean).join("\n");
 }
 
-export async function aiImproveScript({ existing, lang, template }) {
+export async function aiImproveScript({ existing, lang, template, projectDigest }) {
   const system = `Tu améliores un script de pub vidéo verticale en ${lang === "fr" ? "français" : "english"}. Style: ${template}. Garde le nombre de lignes. UNE phrase courte par ligne. Pas d'emoji, pas de hashtags. Réponds UNIQUEMENT avec le script amélioré.`;
-  const out = await llmComplete({ system, user: existing, maxTokens: 400, temperature: 0.7 });
+  const user = `${existing}${projectContextBlock(projectDigest)}`;
+  const out = await llmComplete({ system, user, maxTokens: 500, temperature: 0.7 });
   return out.split("\n").map(l => l.replace(/^[-\d.\s)]+/, "").trim()).filter(Boolean).join("\n");
 }
 
-export async function aiGenerateStockQueries({ scriptLines, pitch }) {
+export async function aiGenerateStockQueries({ scriptLines, pitch, projectDigest }) {
   const system = `Tu génères des requêtes de recherche pour Pexels (banque d'images). Pour chaque ligne du script, donne UNE requête en ANGLAIS, 3-5 mots, visuels concrets et cinématiques (pas d'abstrait). Format: une requête par ligne, dans l'ordre, rien d'autre.`;
-  const user = `Pitch: ${pitch || "(non précisé)"}\n\nScript:\n${scriptLines.map((l, i) => `${i + 1}. ${l}`).join("\n")}\n\nDonne ${scriptLines.length} requêtes Pexels en anglais, une par ligne.`;
-  const out = await llmComplete({ system, user, maxTokens: 400, temperature: 0.6 });
+  const user = `Pitch: ${pitch || "(non précisé)"}${projectContextBlock(projectDigest)}\n\nScript:\n${scriptLines.map((l, i) => `${i + 1}. ${l}`).join("\n")}\n\nDonne ${scriptLines.length} requêtes Pexels en anglais, une par ligne.`;
+  const out = await llmComplete({ system, user, maxTokens: 500, temperature: 0.6 });
   return out.split("\n").map(l => l.replace(/^[-\d.\s)]+/, "").replace(/^["']|["']$/g, "").trim()).filter(Boolean);
 }
 

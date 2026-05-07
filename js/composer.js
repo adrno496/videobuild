@@ -30,24 +30,55 @@ export async function loadFFmpeg(onLog) {
   const FFMPEG_PKG = "https://unpkg.com/@ffmpeg/ffmpeg@0.12.10/dist/umd";
   const classWorkerURL = await toBlobURL(`${FFMPEG_PKG}/814.ffmpeg.js`, "text/javascript");
 
-  // Try multi-thread version first; fallback to single-thread if unsupported
+  const fmtErr = (e) => {
+    if (!e) return "unknown error";
+    if (typeof e === "string") return e;
+    return e.message || e.name || JSON.stringify(e).slice(0, 200) || "unknown error";
+  };
+
+  // Multi-thread requires crossOriginIsolated (COOP/COEP headers must be live).
+  const canMT = typeof crossOriginIsolated !== "undefined" && crossOriginIsolated;
+  if (onLog) onLog(`crossOriginIsolated=${canMT}`);
+
+  if (canMT) {
+    try {
+      await ffmpeg.load({
+        classWorkerURL,
+        coreURL: await toBlobURL(`${FFMPEG_BASE}/ffmpeg-core.js`, "text/javascript"),
+        wasmURL: await toBlobURL(`${FFMPEG_BASE}/ffmpeg-core.wasm`, "application/wasm"),
+        workerURL: await toBlobURL(`${FFMPEG_BASE}/ffmpeg-core.worker.js`, "text/javascript")
+      });
+      ffmpegLoaded = true;
+      return ffmpeg;
+    } catch (e) {
+      if (onLog) onLog(`mt failed (${fmtErr(e)}), trying single-thread`);
+      // Reset instance — a failed load() leaves ffmpeg in a bad state.
+      ffmpeg = new FFmpeg();
+      if (onLog) {
+        ffmpeg.on("log", ({ message }) => onLog(message));
+        ffmpeg.on("progress", ({ progress }) => onLog(`progress: ${(progress * 100).toFixed(0)}%`));
+      }
+    }
+  }
+
   try {
-    await ffmpeg.load({
-      classWorkerURL,
-      coreURL: await toBlobURL(`${FFMPEG_BASE}/ffmpeg-core.js`, "text/javascript"),
-      wasmURL: await toBlobURL(`${FFMPEG_BASE}/ffmpeg-core.wasm`, "application/wasm"),
-      workerURL: await toBlobURL(`${FFMPEG_BASE}/ffmpeg-core.worker.js`, "text/javascript")
-    });
-  } catch (e) {
-    if (onLog) onLog(`mt failed (${e.message}), falling back to single-thread`);
     await ffmpeg.load({
       classWorkerURL,
       coreURL: await toBlobURL(`${FFMPEG_BASE_FALLBACK}/ffmpeg-core.js`, "text/javascript"),
       wasmURL: await toBlobURL(`${FFMPEG_BASE_FALLBACK}/ffmpeg-core.wasm`, "application/wasm")
     });
+  } catch (e) {
+    throw new Error(`ffmpeg.wasm load failed: ${fmtErr(e)}`);
   }
   ffmpegLoaded = true;
   return ffmpeg;
+}
+
+// Reset module state — useful after Hard refresh (we still keep the cached files
+// because cache-clear button purges Cache API + reloads the page).
+export function resetFFmpegCache() {
+  ffmpeg = null;
+  ffmpegLoaded = false;
 }
 
 // Render a single text overlay (per-scene title) as PNG using <canvas>

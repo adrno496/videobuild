@@ -10,7 +10,8 @@ const state = {
   template: "viral",
   uploads: [],            // [{ name, type: "image"|"video", buf: ArrayBuffer }]
   stockResults: [],       // [{ buf, type, query }]
-  visualSource: "upload"  // "upload" | "stock"
+  visualSource: "upload", // "upload" | "stock"
+  projectDigest: ""       // text digest of uploaded project folder, fed to LLM
 };
 
 // ─── Init ─────────────────────────────────────────────
@@ -104,6 +105,9 @@ function initBuildPanel() {
   // fetch stock
   $("#fetch-stock").addEventListener("click", fetchStock);
 
+  // Project folder ingestion (for LLM context)
+  $("#proj-folder").addEventListener("change", handleProjectFolder);
+
   // AI helpers
   $("#ai-script").addEventListener("click", () => aiAction("generate"));
   $("#ai-improve").addEventListener("click", () => aiAction("improve"));
@@ -112,6 +116,70 @@ function initBuildPanel() {
   // generate
   $("#generate").addEventListener("click", generate);
   $("#reset").addEventListener("click", () => location.reload());
+}
+
+// ─── Project folder digest ────────────────────────────
+// Filter rules: text files only, skip heavy/irrelevant dirs, cap total size.
+const FOLDER_IGNORE_DIRS = /(?:^|\/)(?:node_modules|\.git|\.next|\.nuxt|dist|build|out|coverage|\.cache|\.turbo|\.vercel|\.expo|\.idea|\.vscode|target|vendor|\.venv|venv|__pycache__|\.gradle|Pods)(?:\/|$)/;
+const FOLDER_PRIORITY = [
+  /(^|\/)README(\.md|\.txt)?$/i,
+  /(^|\/)readme(\.md|\.txt)?$/,
+  /(^|\/)package\.json$/,
+  /(^|\/)pyproject\.toml$/,
+  /(^|\/)Cargo\.toml$/,
+  /(^|\/)go\.mod$/,
+  /(^|\/)composer\.json$/,
+  /(^|\/)Gemfile$/,
+  /(^|\/)pubspec\.yaml$/,
+  /(^|\/)app\.json$/,
+  /(^|\/)manifest\.json$/,
+  /(^|\/)index\.(html|tsx?|jsx?)$/,
+  /(^|\/)main\.(tsx?|jsx?|py|go|rs)$/,
+  /(^|\/)App\.(tsx?|jsx?|vue|svelte)$/,
+  /(^|\/).*\.md$/i
+];
+const FOLDER_TEXT_EXT = /\.(md|txt|json|toml|yaml|yml|html|css|scss|less|js|jsx|ts|tsx|vue|svelte|py|rb|go|rs|java|kt|swift|dart|php|sql|env\.example|sh)$/i;
+const MAX_FILE_SIZE = 80 * 1024;     // 80 KB per file
+const MAX_DIGEST_SIZE = 60 * 1024;   // 60 KB total → ~15k tokens
+
+async function handleProjectFolder(e) {
+  const files = Array.from(e.target.files || []);
+  const summary = $("#folder-summary");
+  if (!files.length) { state.projectDigest = ""; summary.textContent = ""; return; }
+  summary.textContent = `⏳ analyse de ${files.length} fichiers…`;
+
+  // Keep only text files outside ignore-dirs
+  const candidates = files
+    .filter(f => {
+      const path = f.webkitRelativePath || f.name;
+      if (FOLDER_IGNORE_DIRS.test("/" + path)) return false;
+      if (f.size > MAX_FILE_SIZE) return false;
+      return FOLDER_TEXT_EXT.test(path);
+    })
+    .map(f => ({ file: f, path: f.webkitRelativePath || f.name }))
+    .sort((a, b) => priorityRank(a.path) - priorityRank(b.path));
+
+  let digest = "";
+  let included = 0;
+  for (const { file, path } of candidates) {
+    if (digest.length >= MAX_DIGEST_SIZE) break;
+    try {
+      const text = await file.text();
+      const remaining = MAX_DIGEST_SIZE - digest.length;
+      const chunk = text.length > remaining ? text.slice(0, remaining) + "\n…[truncated]" : text;
+      digest += `\n\n=== ${path} ===\n${chunk}`;
+      included++;
+    } catch {}
+  }
+  state.projectDigest = digest.trim();
+  summary.textContent = `✓ ${included} fichiers indexés (${(state.projectDigest.length / 1024).toFixed(1)} Ko de contexte pour l'IA)`;
+}
+
+function priorityRank(path) {
+  for (let i = 0; i < FOLDER_PRIORITY.length; i++) {
+    if (FOLDER_PRIORITY[i].test(path)) return i;
+  }
+  return FOLDER_PRIORITY.length + path.split("/").length;
 }
 
 async function hardRefresh() {
@@ -146,10 +214,11 @@ async function aiAction(kind) {
     const tpl = state.template;
     const duration = parseFloat($("#proj-duration").value) || 25;
 
+    const projectDigest = state.projectDigest;
     if (kind === "generate") {
-      if (!pitch) { alert("Renseigne un pitch ou un nom de projet."); return; }
+      if (!pitch && !projectDigest) { alert("Renseigne un pitch, un nom de projet, ou uploade le dossier du projet."); return; }
       setBusy("⏳ génération script…");
-      const script = await aiGenerateScript({ pitch, lang, template: tpl, duration });
+      const script = await aiGenerateScript({ pitch, lang, template: tpl, duration, projectDigest });
       $("#proj-script").value = script;
       updateScriptCounter();
       setBusy("✨ script généré");
@@ -157,7 +226,7 @@ async function aiAction(kind) {
       const existing = $("#proj-script").value.trim();
       if (!existing) { alert("Écris d'abord un script à améliorer."); return; }
       setBusy("⏳ amélioration…");
-      const script = await aiImproveScript({ existing, lang, template: tpl });
+      const script = await aiImproveScript({ existing, lang, template: tpl, projectDigest });
       $("#proj-script").value = script;
       updateScriptCounter();
       setBusy("✨ script amélioré");
@@ -165,7 +234,7 @@ async function aiAction(kind) {
       const lines = $("#proj-script").value.split("\n").map(l => l.trim()).filter(Boolean);
       if (!lines.length) { alert("Écris d'abord un script."); return; }
       setBusy("⏳ génération queries…");
-      const queries = await aiGenerateStockQueries({ scriptLines: lines, pitch });
+      const queries = await aiGenerateStockQueries({ scriptLines: lines, pitch, projectDigest });
       const inputs = $$(".stock-q");
       queries.forEach((q, i) => { if (inputs[i]) inputs[i].value = q; });
       setBusy(`✨ ${queries.length} queries générées`);

@@ -149,6 +149,11 @@
       <p class="muted">Une phrase par ligne. Le découpage en scènes se fait auto.</p>
       <label>Pitch produit (pour ✨ IA)</label>
       <input id="proj-pitch" placeholder="Ex: app de tracking sportif gamifiée pour ados, focus discipline">
+
+      <label style="margin-top:12px">📁 Dossier du projet (optionnel — l'IA lira le code pour mieux te comprendre)</label>
+      <input id="proj-folder" type="file" webkitdirectory directory multiple>
+      <div id="folder-summary" class="muted" style="margin-top:6px"></div>
+
       <div style="display:flex;gap:8px;margin:12px 0;flex-wrap:wrap">
         <button id="ai-script" class="secondary" type="button">✨ Générer script (IA)</button>
         <button id="ai-improve" class="secondary" type="button">✨ Améliorer script existant</button>
