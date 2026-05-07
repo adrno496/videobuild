@@ -1,0 +1,10 @@
+{
+  "name": "montage-ai",
+  "version": "0.1.0",
+  "description": "Crée des pubs vidéo verticales en 1 clic, 100% navigateur (ffmpeg.wasm)",
+  "scripts": {
+    "dev": "python3 server.py",
+    "build": "echo 'No build step — static site'"
+  },
+  "license": "MIT"
+}

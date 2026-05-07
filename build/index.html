@@ -1,0 +1,220 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>MontageAI — Pub vidéo en 1 clic</title>
+<link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+<header>
+  <div class="brand">⚡ MontageAI</div>
+  <nav>
+    <button class="nav-btn" data-tab="keys">🔑 Clés API</button>
+    <button class="nav-btn active" data-tab="build">🎬 Créer</button>
+    <button class="nav-btn" data-tab="about">ℹ️ À propos</button>
+  </nav>
+</header>
+
+<main>
+  <!-- ═══ TAB: API KEYS ═══ -->
+  <section class="tab" data-tab="keys" hidden>
+    <h1>🔑 Clés API</h1>
+    <p class="muted">Stockées localement dans ton navigateur. Jamais envoyées à un serveur.</p>
+
+    <div class="card">
+      <label>Pexels API Key <span class="badge free">gratuit</span></label>
+      <input id="key-pexels" type="password" placeholder="Récupère sur pexels.com/api">
+      <small><a href="https://www.pexels.com/api/" target="_blank">→ Obtenir une clé Pexels (gratuit)</a></small>
+    </div>
+
+    <div class="card">
+      <label>Pixabay API Key <span class="badge free">gratuit</span></label>
+      <input id="key-pixabay" type="password" placeholder="Récupère sur pixabay.com/api/docs/">
+      <small><a href="https://pixabay.com/api/docs/" target="_blank">→ Obtenir une clé Pixabay (gratuit)</a></small>
+    </div>
+
+    <div class="card">
+      <label>ElevenLabs API Key <span class="badge free">free tier OK</span></label>
+      <input id="key-elevenlabs" type="password" placeholder="Récupère sur elevenlabs.io">
+      <small><a href="https://elevenlabs.io/app/settings/api-keys" target="_blank">→ Obtenir une clé ElevenLabs (assure-toi de cocher Text-to-Speech)</a></small>
+    </div>
+
+    <button id="save-keys" class="primary">💾 Enregistrer</button>
+    <button id="test-keys" class="secondary">🧪 Tester les clés</button>
+    <div id="keys-status"></div>
+  </section>
+
+  <!-- ═══ TAB: BUILD ═══ -->
+  <section class="tab" data-tab="build">
+    <h1>🎬 Crée ta pub en 6 étapes</h1>
+
+    <!-- Step 1: project info -->
+    <div class="step card">
+      <h2><span class="step-num">1</span> Ton projet</h2>
+      <div class="row">
+        <div class="col">
+          <label>Nom de l'app / produit</label>
+          <input id="proj-name" placeholder="Ex: GoatFuel, MyApp...">
+        </div>
+        <div class="col">
+          <label>Langue</label>
+          <select id="proj-lang">
+            <option value="fr">Français</option>
+            <option value="en">English</option>
+          </select>
+        </div>
+      </div>
+      <div class="row">
+        <div class="col">
+          <label>Format</label>
+          <select id="proj-format">
+            <option value="9:16">9:16 — TikTok / Reels / Shorts</option>
+            <option value="1:1">1:1 — Instagram feed</option>
+            <option value="16:9">16:9 — YouTube / LinkedIn</option>
+          </select>
+        </div>
+        <div class="col">
+          <label>Durée totale (s)</label>
+          <input id="proj-duration" type="number" min="10" max="60" value="25">
+        </div>
+      </div>
+    </div>
+
+    <!-- Step 2: template -->
+    <div class="step card">
+      <h2><span class="step-num">2</span> Modèle</h2>
+      <div class="templates">
+        <div class="template-card" data-template="viral">
+          <h3>🔥 Viral fast-cut</h3>
+          <p>9 cuts, voix punchy, musique phonk. Hook → features → CTA.</p>
+        </div>
+        <div class="template-card" data-template="pov">
+          <h3>🌅 POV cinématique</h3>
+          <p>Lifestyle 30s, voix posée, musique build. Story-driven.</p>
+        </div>
+        <div class="template-card" data-template="asmr">
+          <h3>🎵 ASMR montage</h3>
+          <p>15s, zéro voix, woosh + impact. Pure visuels.</p>
+        </div>
+        <div class="template-card" data-template="custom">
+          <h3>✏️ Custom</h3>
+          <p>J'écris mon propre script.</p>
+        </div>
+      </div>
+    </div>
+
+    <!-- Step 3: script -->
+    <div class="step card">
+      <h2><span class="step-num">3</span> Script narration</h2>
+      <p class="muted">Une phrase par ligne. Le découpage en scènes se fait auto.</p>
+      <textarea id="proj-script" rows="8" placeholder="Ligne 1 = scène 1
+Ligne 2 = scène 2
+..."></textarea>
+      <small>Caractères : <span id="script-chars">0</span> · Scènes : <span id="script-scenes">0</span></small>
+    </div>
+
+    <!-- Step 4: visuals -->
+    <div class="step card">
+      <h2><span class="step-num">4</span> Visuels</h2>
+      <div class="tabs-mini">
+        <button class="tab-mini active" data-vis="upload">📸 Mes screenshots</button>
+        <button class="tab-mini" data-vis="stock">🌐 Stock Pexels</button>
+      </div>
+
+      <div class="tab-content" data-vis="upload">
+        <input id="upload-images" type="file" accept="image/*,video/*" multiple>
+        <div id="upload-preview" class="preview-grid"></div>
+      </div>
+
+      <div class="tab-content" data-vis="stock" hidden>
+        <p class="muted">Une recherche Pexels par scène (mots-clés en anglais marchent mieux).</p>
+        <div id="stock-queries"></div>
+        <button id="fetch-stock" class="secondary">🔍 Récupérer le stock</button>
+        <div id="stock-preview" class="preview-grid"></div>
+      </div>
+    </div>
+
+    <!-- Step 5: audio -->
+    <div class="step card">
+      <h2><span class="step-num">5</span> Audio</h2>
+      <div class="row">
+        <div class="col">
+          <label>Voix off (ElevenLabs)</label>
+          <select id="voice-id">
+            <option value="JBFqnCBsd6RMkjVDRZzb">George — masc grave</option>
+            <option value="21m00Tcm4TlvDq8ikWAM">Rachel — fém claire</option>
+            <option value="pNInz6obpgDQGcFmaJgB">Adam — masc neutre</option>
+            <option value="EXAVITQu4vr4xnSDxMaL">Sarah — fém douce</option>
+            <option value="">— Aucune (pas de narration)</option>
+          </select>
+        </div>
+        <div class="col">
+          <label>Style voix</label>
+          <select id="voice-style">
+            <option value="0.4">Punchy (viral)</option>
+            <option value="0.25">Posé (POV)</option>
+            <option value="0.6">Émotionnel</option>
+          </select>
+        </div>
+      </div>
+      <label>Recherche musique (Pixabay)</label>
+      <input id="music-query" placeholder="ex: phonk dark gym  ·  cinematic dark slow build  ·  upbeat corporate">
+    </div>
+
+    <!-- Step 6: generate -->
+    <div class="step card">
+      <h2><span class="step-num">6</span> Générer</h2>
+      <button id="generate" class="primary big">🎬 Générer la vidéo</button>
+      <div id="progress" class="progress" hidden>
+        <div class="progress-bar"><div id="progress-fill"></div></div>
+        <p id="progress-text">Préparation…</p>
+        <pre id="progress-log"></pre>
+      </div>
+      <div id="output" hidden>
+        <video id="output-video" controls playsinline></video>
+        <div class="output-actions">
+          <a id="download-link" class="primary" download="ad.mp4">⬇️ Télécharger</a>
+          <button id="reset" class="secondary">🔄 Refaire</button>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ═══ TAB: ABOUT ═══ -->
+  <section class="tab" data-tab="about" hidden>
+    <h1>ℹ️ MontageAI</h1>
+    <p>Outil web qui génère des pubs vidéo verticales pour réseaux sociaux. 100 % gratuit, 100 % dans ton navigateur.</p>
+
+    <h2>Comment ça marche</h2>
+    <ol>
+      <li><strong>Tu mets tes propres clés API</strong> (Pexels, Pixabay, ElevenLabs) — gratuit pour tout le monde</li>
+      <li><strong>Tu écris ton script</strong> (ou tu pioches un modèle)</li>
+      <li><strong>Tu uploades tes screenshots</strong> ou tu décris du stock à chercher</li>
+      <li><strong>L'app appelle les APIs depuis ton navigateur</strong> — aucun backend, aucune fuite de clé</li>
+      <li><strong>FFmpeg.wasm compose la vidéo localement</strong> — ton CPU, ton navigateur</li>
+      <li><strong>Tu télécharges le MP4</strong></li>
+    </ol>
+
+    <h2>Tarifs</h2>
+    <p>L'app est gratuite. Les APIs externes :</p>
+    <ul>
+      <li><strong>Pexels</strong> : gratuit illimité (rate-limit raisonnable)</li>
+      <li><strong>Pixabay</strong> : gratuit illimité (100 req/min)</li>
+      <li><strong>ElevenLabs</strong> : free tier 10 000 caractères/mois (~25 pubs de 25s)</li>
+    </ul>
+
+    <h2>Source</h2>
+    <p>Code MIT — fork-le, modifie-le. <a href="#" id="github-link">Voir sur GitHub</a></p>
+  </section>
+</main>
+
+<footer>
+  <p>⚡ MontageAI · Gratuit · Open source · Aucun tracking</p>
+</footer>
+
+<script src="https://unpkg.com/@ffmpeg/ffmpeg@0.12.10/dist/umd/ffmpeg.js"></script>
+<script src="https://unpkg.com/@ffmpeg/util@0.12.1/dist/umd/index.js"></script>
+<script type="module" src="js/app.js"></script>
+</body>
+</html>
