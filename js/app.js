@@ -24,8 +24,12 @@ window.addEventListener("DOMContentLoaded", () => {
 // ─── Tabs ─────────────────────────────────────────────
 function initTabs() {
   $$(".nav-btn").forEach(btn => {
+    if (btn.id === "hard-refresh") {
+      btn.addEventListener("click", hardRefresh);
+      return;
+    }
     btn.addEventListener("click", () => {
-      $$(".nav-btn").forEach(b => b.classList.remove("active"));
+      $$(".nav-btn").forEach(b => { if (b.id !== "hard-refresh") b.classList.remove("active"); });
       btn.classList.add("active");
       const tab = btn.dataset.tab;
       $$("section.tab").forEach(s => s.hidden = s.dataset.tab !== tab);
@@ -108,6 +112,29 @@ function initBuildPanel() {
   // generate
   $("#generate").addEventListener("click", generate);
   $("#reset").addEventListener("click", () => location.reload());
+}
+
+async function hardRefresh() {
+  if (!confirm("Vider les caches et recharger ?\n\n• Cache API + service workers purgés\n• ffmpeg.wasm sera retéléchargé\n• Tes clés API restent enregistrées")) return;
+  const btn = $("#hard-refresh");
+  btn.disabled = true;
+  btn.textContent = "⏳ purge…";
+  try {
+    if ("caches" in window) {
+      const names = await caches.keys();
+      await Promise.all(names.map(n => caches.delete(n)));
+    }
+    if ("serviceWorker" in navigator) {
+      const regs = await navigator.serviceWorker.getRegistrations();
+      await Promise.all(regs.map(r => r.unregister()));
+    }
+  } catch (e) {
+    console.warn("hard refresh partial:", e);
+  }
+  // Cache-busting reload: bypasses HTTP cache by forcing a unique URL.
+  const url = new URL(location.href);
+  url.searchParams.set("_t", Date.now().toString());
+  location.replace(url.toString());
 }
 
 async function aiAction(kind) {
