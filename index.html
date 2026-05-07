@@ -40,6 +40,44 @@
       <small><a href="https://elevenlabs.io/app/settings/api-keys" target="_blank">→ Obtenir une clé ElevenLabs (assure-toi de cocher Text-to-Speech)</a></small>
     </div>
 
+    <h2 style="margin-top:32px">🧠 LLM (optimisation script + queries)</h2>
+    <p class="muted">Optionnel — utilisé pour générer/améliorer ton script et auto-traduire les queries stock en anglais. Une seule clé suffit.</p>
+
+    <div class="card">
+      <label>Provider LLM préféré</label>
+      <select id="llm-provider">
+        <option value="anthropic">Claude (Anthropic)</option>
+        <option value="openai">OpenAI (GPT-4o)</option>
+        <option value="mistral">Mistral</option>
+        <option value="openrouter">OpenRouter (multi-modèles)</option>
+      </select>
+      <small>Le bouton ✨ utilisera ce provider en priorité.</small>
+    </div>
+
+    <div class="card">
+      <label>Anthropic (Claude) API Key <span class="badge warn">payant</span></label>
+      <input id="key-anthropic" type="password" placeholder="sk-ant-...">
+      <small><a href="https://console.anthropic.com/settings/keys" target="_blank">→ console.anthropic.com</a></small>
+    </div>
+
+    <div class="card">
+      <label>OpenAI API Key <span class="badge warn">payant</span></label>
+      <input id="key-openai" type="password" placeholder="sk-...">
+      <small><a href="https://platform.openai.com/api-keys" target="_blank">→ platform.openai.com</a></small>
+    </div>
+
+    <div class="card">
+      <label>Mistral API Key <span class="badge free">free tier</span></label>
+      <input id="key-mistral" type="password" placeholder="...">
+      <small><a href="https://console.mistral.ai/api-keys/" target="_blank">→ console.mistral.ai</a></small>
+    </div>
+
+    <div class="card">
+      <label>OpenRouter API Key <span class="badge warn">payant</span></label>
+      <input id="key-openrouter" type="password" placeholder="sk-or-...">
+      <small><a href="https://openrouter.ai/keys" target="_blank">→ openrouter.ai/keys</a></small>
+    </div>
+
     <button id="save-keys" class="primary">💾 Enregistrer</button>
     <button id="test-keys" class="secondary">🧪 Tester les clés</button>
     <div id="keys-status"></div>
@@ -108,10 +146,16 @@
     <div class="step card">
       <h2><span class="step-num">3</span> Script narration</h2>
       <p class="muted">Une phrase par ligne. Le découpage en scènes se fait auto.</p>
+      <label>Pitch produit (pour ✨ IA)</label>
+      <input id="proj-pitch" placeholder="Ex: app de tracking sportif gamifiée pour ados, focus discipline">
+      <div style="display:flex;gap:8px;margin:12px 0;flex-wrap:wrap">
+        <button id="ai-script" class="secondary" type="button">✨ Générer script (IA)</button>
+        <button id="ai-improve" class="secondary" type="button">✨ Améliorer script existant</button>
+      </div>
       <textarea id="proj-script" rows="8" placeholder="Ligne 1 = scène 1
 Ligne 2 = scène 2
 ..."></textarea>
-      <small>Caractères : <span id="script-chars">0</span> · Scènes : <span id="script-scenes">0</span></small>
+      <small>Caractères : <span id="script-chars">0</span> · Scènes : <span id="script-scenes">0</span> · <span id="ai-status" class="muted"></span></small>
     </div>
 
     <!-- Step 4: visuals -->
@@ -130,7 +174,10 @@ Ligne 2 = scène 2
       <div class="tab-content" data-vis="stock" hidden>
         <p class="muted">Une recherche Pexels par scène (mots-clés en anglais marchent mieux).</p>
         <div id="stock-queries"></div>
-        <button id="fetch-stock" class="secondary">🔍 Récupérer le stock</button>
+        <div style="display:flex;gap:8px;flex-wrap:wrap">
+          <button id="ai-queries" class="secondary" type="button">✨ Auto-générer les queries (IA)</button>
+          <button id="fetch-stock" class="secondary">🔍 Récupérer le stock</button>
+        </div>
         <div id="stock-preview" class="preview-grid"></div>
       </div>
     </div>

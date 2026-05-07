@@ -1,5 +1,5 @@
 import { TEMPLATES } from "./templates.js";
-import { saveKeys, loadKeys, testKeys, pexelsImageSearch, pexelsVideoSearch, pixabayMusicSearch, elevenLabsTTS, fetchAsBuffer } from "./api.js";
+import { saveKeys, loadKeys, testKeys, pexelsImageSearch, pexelsVideoSearch, pixabayMusicSearch, elevenLabsTTS, fetchAsBuffer, aiGenerateScript, aiImproveScript, aiGenerateStockQueries } from "./api.js";
 import { compose, renderTextOverlay, renderFinalCard } from "./composer.js";
 
 const $ = sel => document.querySelector(sel);
@@ -48,12 +48,22 @@ function initKeysPanel() {
   $("#key-pexels").value = k.pexels;
   $("#key-pixabay").value = k.pixabay;
   $("#key-elevenlabs").value = k.elevenlabs;
+  $("#key-anthropic").value = k.anthropic;
+  $("#key-openai").value = k.openai;
+  $("#key-mistral").value = k.mistral;
+  $("#key-openrouter").value = k.openrouter;
+  $("#llm-provider").value = k.llmProvider;
 
   $("#save-keys").addEventListener("click", () => {
     saveKeys({
       pexels: $("#key-pexels").value.trim(),
       pixabay: $("#key-pixabay").value.trim(),
-      elevenlabs: $("#key-elevenlabs").value.trim()
+      elevenlabs: $("#key-elevenlabs").value.trim(),
+      anthropic: $("#key-anthropic").value.trim(),
+      openai: $("#key-openai").value.trim(),
+      mistral: $("#key-mistral").value.trim(),
+      openrouter: $("#key-openrouter").value.trim(),
+      llmProvider: $("#llm-provider").value
     });
     setKeyStatus("✅ Clés enregistrées localement.", "ok");
   });
@@ -90,9 +100,53 @@ function initBuildPanel() {
   // fetch stock
   $("#fetch-stock").addEventListener("click", fetchStock);
 
+  // AI helpers
+  $("#ai-script").addEventListener("click", () => aiAction("generate"));
+  $("#ai-improve").addEventListener("click", () => aiAction("improve"));
+  $("#ai-queries").addEventListener("click", () => aiAction("queries"));
+
   // generate
   $("#generate").addEventListener("click", generate);
   $("#reset").addEventListener("click", () => location.reload());
+}
+
+async function aiAction(kind) {
+  const status = $("#ai-status");
+  const setBusy = (msg) => { status.textContent = msg; };
+  try {
+    const lang = $("#proj-lang").value;
+    const pitch = $("#proj-pitch").value.trim() || $("#proj-name").value.trim();
+    const tpl = state.template;
+    const duration = parseFloat($("#proj-duration").value) || 25;
+
+    if (kind === "generate") {
+      if (!pitch) { alert("Renseigne un pitch ou un nom de projet."); return; }
+      setBusy("⏳ génération script…");
+      const script = await aiGenerateScript({ pitch, lang, template: tpl, duration });
+      $("#proj-script").value = script;
+      updateScriptCounter();
+      setBusy("✨ script généré");
+    } else if (kind === "improve") {
+      const existing = $("#proj-script").value.trim();
+      if (!existing) { alert("Écris d'abord un script à améliorer."); return; }
+      setBusy("⏳ amélioration…");
+      const script = await aiImproveScript({ existing, lang, template: tpl });
+      $("#proj-script").value = script;
+      updateScriptCounter();
+      setBusy("✨ script amélioré");
+    } else if (kind === "queries") {
+      const lines = $("#proj-script").value.split("\n").map(l => l.trim()).filter(Boolean);
+      if (!lines.length) { alert("Écris d'abord un script."); return; }
+      setBusy("⏳ génération queries…");
+      const queries = await aiGenerateStockQueries({ scriptLines: lines, pitch });
+      const inputs = $$(".stock-q");
+      queries.forEach((q, i) => { if (inputs[i]) inputs[i].value = q; });
+      setBusy(`✨ ${queries.length} queries générées`);
+    }
+  } catch (e) {
+    console.error(e);
+    setBusy(`❌ ${e.message}`);
+  }
 }
 
 function applyTemplate(tplName) {

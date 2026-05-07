@@ -25,9 +25,15 @@ export async function loadFFmpeg(onLog) {
     ffmpeg.on("log", ({ message }) => onLog(message));
     ffmpeg.on("progress", ({ progress }) => onLog(`progress: ${(progress * 100).toFixed(0)}%`));
   }
+  // The class-worker (spawned by FFmpeg JS class itself) must be same-origin under COEP.
+  // We turn the UMD chunk into a blob URL so it loads from blob: scheme.
+  const FFMPEG_PKG = "https://unpkg.com/@ffmpeg/ffmpeg@0.12.10/dist/umd";
+  const classWorkerURL = await toBlobURL(`${FFMPEG_PKG}/814.ffmpeg.js`, "text/javascript");
+
   // Try multi-thread version first; fallback to single-thread if unsupported
   try {
     await ffmpeg.load({
+      classWorkerURL,
       coreURL: await toBlobURL(`${FFMPEG_BASE}/ffmpeg-core.js`, "text/javascript"),
       wasmURL: await toBlobURL(`${FFMPEG_BASE}/ffmpeg-core.wasm`, "application/wasm"),
       workerURL: await toBlobURL(`${FFMPEG_BASE}/ffmpeg-core.worker.js`, "text/javascript")
@@ -35,6 +41,7 @@ export async function loadFFmpeg(onLog) {
   } catch (e) {
     if (onLog) onLog(`mt failed (${e.message}), falling back to single-thread`);
     await ffmpeg.load({
+      classWorkerURL,
       coreURL: await toBlobURL(`${FFMPEG_BASE_FALLBACK}/ffmpeg-core.js`, "text/javascript"),
       wasmURL: await toBlobURL(`${FFMPEG_BASE_FALLBACK}/ffmpeg-core.wasm`, "application/wasm")
     });
