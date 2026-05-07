@@ -224,6 +224,55 @@ function dataURLToBuffer(dataURL) {
   return buf.buffer;
 }
 
+// Pre-composite an image + text overlay on a canvas at WxH → single JPEG buffer.
+// Avoids ffmpeg.wasm dual-input + overlay pipelines which hang on some scenes.
+export async function compositeImageWithOverlay(imageBuf, overlayDataURL, W, H) {
+  const baseURL = URL.createObjectURL(new Blob([imageBuf]));
+  try {
+    const baseImg = await loadImage(baseURL);
+    const cv = document.createElement("canvas");
+    cv.width = W; cv.height = H;
+    const ctx = cv.getContext("2d");
+    // cover-fit the source image (like CSS object-fit: cover)
+    const srcRatio = baseImg.width / baseImg.height;
+    const dstRatio = W / H;
+    let sw, sh, sx, sy;
+    if (srcRatio > dstRatio) {
+      sh = baseImg.height;
+      sw = sh * dstRatio;
+      sx = (baseImg.width - sw) / 2;
+      sy = 0;
+    } else {
+      sw = baseImg.width;
+      sh = sw / dstRatio;
+      sx = 0;
+      sy = (baseImg.height - sh) / 2;
+    }
+    // Color grade is applied during the source draw (mimics ffmpeg's eq filter).
+    ctx.filter = "contrast(1.08) saturate(1.05) brightness(1.02)";
+    ctx.drawImage(baseImg, sx, sy, sw, sh, 0, 0, W, H);
+    ctx.filter = "none";
+    if (overlayDataURL) {
+      const ov = await loadImage(overlayDataURL);
+      ctx.drawImage(ov, 0, 0, W, H);
+    }
+    const blob = await new Promise(r => cv.toBlob(r, "image/jpeg", 0.92));
+    return await blob.arrayBuffer();
+  } finally {
+    URL.revokeObjectURL(baseURL);
+  }
+}
+
+function loadImage(src) {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.crossOrigin = "anonymous";
+    img.onload = () => resolve(img);
+    img.onerror = reject;
+    img.src = src;
+  });
+}
+
 /**
  * Compose final video.
  * scenes = [{ visualBuf: ArrayBuffer (image OR video bytes), visualType: "image"|"video", duration, textOverlayDataURL, isVideo }]

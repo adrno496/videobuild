@@ -1,6 +1,6 @@
 import { TEMPLATES } from "./templates.js";
 import { saveKeys, loadKeys, testKeys, pexelsImageSearch, pexelsVideoSearch, pixabayMusicSearch, elevenLabsTTS, openAITTS, fetchAsBuffer, aiGenerateScript, aiImproveScript, aiGenerateStockQueries, llmComplete } from "./api.js";
-import { compose, renderTextOverlay, renderFinalCard } from "./composer.js";
+import { compose, renderTextOverlay, renderFinalCard, compositeImageWithOverlay } from "./composer.js";
 import {
   saveFormState, loadFormState, clearFormState,
   dbPutUpload, dbGetAllUploads, dbClearUploads,
@@ -766,7 +766,9 @@ async function generate() {
 
     const [narrationBuf, musicBuf] = await Promise.all([ttsPromise, musicPromise]);
 
-    // Build scenes data
+    // Build scenes data — for IMAGE scenes with text overlay, we pre-composite
+    // image + text in canvas to a single JPEG. ffmpeg.wasm hangs on dual-input
+    // overlay pipelines (loop:1 PNG + zoompan), so this is more reliable AND faster.
     setProgress(35, "Préparation scènes…");
     const scenes = [];
     const [W, H] = format === "1:1" ? [1080, 1080] : format === "16:9" ? [1920, 1080] : [1080, 1920];
@@ -774,12 +776,18 @@ async function generate() {
       const v = visuals[i];
       const text = scriptLines[i] || "";
       const overlayURL = text && text.length < 80 ? renderTextOverlay({ width: W, height: H, text: text.toUpperCase() }) : null;
-      scenes.push({
-        visualBuf: v.buf,
-        visualType: v.type,
-        duration: visualDur,
-        textOverlayDataURL: overlayURL
-      });
+      if (v.type === "image" && overlayURL) {
+        // Pre-composite image + overlay at target resolution
+        const composedBuf = await compositeImageWithOverlay(v.buf, overlayURL, W, H);
+        scenes.push({ visualBuf: composedBuf, visualType: "image", duration: visualDur, textOverlayDataURL: null });
+      } else if (v.type === "image") {
+        // Pre-composite image alone (handles cover-fit + color grade)
+        const composedBuf = await compositeImageWithOverlay(v.buf, null, W, H);
+        scenes.push({ visualBuf: composedBuf, visualType: "image", duration: visualDur, textOverlayDataURL: null });
+      } else {
+        // Video → keep ffmpeg overlay path (canvas pre-composite per-frame is too slow)
+        scenes.push({ visualBuf: v.buf, visualType: "video", duration: visualDur, textOverlayDataURL: overlayURL });
+      }
     }
 
     // Final logo card scene — uses brand kit colors/logo if set
