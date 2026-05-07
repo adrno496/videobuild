@@ -129,6 +129,19 @@ export async function pixabayMusicSearch(query, { minDur = 25, maxDur = 90 } = {
   return hits[0] || null;
 }
 
+// ── OpenAI TTS ─────────────────────────────────────────────────
+export async function openAITTS(text, { voice = "alloy", model = "tts-1" } = {}) {
+  const key = KEYS.openai();
+  if (!key) throw new Error("OpenAI API key missing — saisis-la dans l'onglet Clés API");
+  const r = await fetch("https://api.openai.com/v1/audio/speech", {
+    method: "POST",
+    headers: { "Authorization": `Bearer ${key}`, "Content-Type": "application/json" },
+    body: JSON.stringify({ model, voice, input: text, response_format: "mp3" })
+  });
+  if (!r.ok) throw new Error(`OpenAI TTS: ${r.status} — ${(await r.text()).slice(0, 200)}`);
+  return await r.arrayBuffer();
+}
+
 // ── ElevenLabs ─────────────────────────────────────────────────
 export async function elevenLabsTTS(text, { voiceId, style = 0.4, stability = 0.55 } = {}) {
   const key = KEYS.elevenlabs();

@@ -1,5 +1,5 @@
 import { TEMPLATES } from "./templates.js";
-import { saveKeys, loadKeys, testKeys, pexelsImageSearch, pexelsVideoSearch, pixabayMusicSearch, elevenLabsTTS, fetchAsBuffer, aiGenerateScript, aiImproveScript, aiGenerateStockQueries, llmComplete } from "./api.js";
+import { saveKeys, loadKeys, testKeys, pexelsImageSearch, pexelsVideoSearch, pixabayMusicSearch, elevenLabsTTS, openAITTS, fetchAsBuffer, aiGenerateScript, aiImproveScript, aiGenerateStockQueries, llmComplete } from "./api.js";
 import { compose, renderTextOverlay, renderFinalCard } from "./composer.js";
 import {
   saveFormState, loadFormState, clearFormState,
@@ -30,7 +30,8 @@ const state = {
   uploads: [],            // [{ name, type: "image"|"video", buf: ArrayBuffer }]
   stockResults: [],       // [{ buf, type, query }]
   visualSource: "upload", // "upload" | "stock"
-  projectDigest: ""       // text digest of uploaded project folder, fed to LLM
+  projectDigest: "",      // text digest of uploaded project folder, fed to LLM
+  uploadedMusic: null     // { buf: ArrayBuffer, name } — user-provided music
 };
 
 // ─── Init ─────────────────────────────────────────────
@@ -229,6 +230,21 @@ function initBuildPanel() {
 
   // Drag & drop on dropzone
   initDragDrop();
+
+  // Voice picker: show custom ID input if "custom" selected
+  $("#voice-id").addEventListener("change", (e) => {
+    $("#voice-custom-id").style.display = e.target.value === "custom" ? "block" : "none";
+  });
+
+  // User-uploaded music
+  $("#music-upload").addEventListener("change", async (e) => {
+    const f = e.target.files?.[0];
+    if (!f) { state.uploadedMusic = null; $("#music-upload-info").textContent = ""; return; }
+    if (f.size > 20 * 1024 * 1024) { alert("Fichier audio > 20 Mo, ça va ralentir le rendu."); }
+    const buf = await f.arrayBuffer();
+    state.uploadedMusic = { buf, name: f.name };
+    $("#music-upload-info").textContent = `✓ ${f.name} (${(buf.byteLength / 1024 / 1024).toFixed(1)} Mo)`;
+  });
 
   // Auto-save form state on every input
   const debouncedSave = debounce(() => {
@@ -694,9 +710,15 @@ async function generate() {
     const tpl = TEMPLATES[state.template];
 
     const scriptLines = $("#proj-script").value.split("\n").map(l => l.trim()).filter(Boolean);
-    const useVoice = !!$("#voice-id").value && scriptLines.length > 0;
-    const voiceId = $("#voice-id").value;
+    const voiceSel = $("#voice-id").value;
+    const useVoice = !!voiceSel && scriptLines.length > 0;
+    const useOpenAITTS = voiceSel.startsWith("openai:");
+    const openAIVoice = useOpenAITTS ? voiceSel.slice("openai:".length) : null;
+    const voiceId = voiceSel === "custom" ? $("#voice-custom-id").value.trim() : voiceSel;
     const voiceStyle = parseFloat($("#voice-style").value || "0.4");
+    if (useVoice && !useOpenAITTS && voiceSel === "custom" && !voiceId) {
+      throw new Error("Voix custom sélectionnée mais ID vide.");
+    }
 
     // Pick visuals
     const visuals = state.visualSource === "upload" ? state.uploads : state.stockResults;
@@ -708,28 +730,39 @@ async function generate() {
     const visualDur = (totalDuration - logoDur) / N_visual;
     setProgress(10, `Plan: ${N_visual} scènes × ${visualDur.toFixed(1)}s + logo card`);
 
-    // Run TTS + music search in parallel — ~2× faster than sequential
+    // Run TTS + music in parallel — ~2× faster than sequential
     setProgress(15, "Voix off + musique en parallèle…");
-    const ttsPromise = useVoice
-      ? elevenLabsTTS(scriptLines.join(" "), { voiceId, style: voiceStyle })
+    const ttsPromise = !useVoice ? Promise.resolve(null)
+      : useOpenAITTS ? openAITTS(scriptLines.join(" "), { voice: openAIVoice })
+          .then(buf => { log(`✓ voix off (OpenAI ${openAIVoice}) ${(buf.byteLength / 1024).toFixed(1)} Ko`); return buf; })
+          .catch(e => { log(`⚠ OpenAI TTS: ${e.message}`); return null; })
+      : elevenLabsTTS(scriptLines.join(" "), { voiceId, style: voiceStyle })
           .then(buf => { log(`✓ voix off ${(buf.byteLength / 1024).toFixed(1)} Ko`); return buf; })
-          .catch(e => { log(`⚠ voix off: ${e.message}`); return null; })
-      : Promise.resolve(null);
+          .catch(e => {
+            const m = /402/.test(e.message) ? "⚠ ElevenLabs 402 — free tier ne peut plus utiliser les voix de la librairie via l'API. Solutions : (1) clone ta voix dans ton compte ElevenLabs → utilise 🎤 Voix custom, (2) bascule sur OpenAI TTS." : `⚠ voix off: ${e.message}`;
+            log(m); return null;
+          });
 
     const musicQuery = $("#music-query").value.trim();
-    const musicPromise = musicQuery
-      ? pixabayMusicSearch(musicQuery, { minDur: totalDuration, maxDur: 90 })
-          .then(async track => {
-            if (track && track.audio) {
-              const buf = await fetchAsBuffer(track.audio);
-              log(`✓ musique: ${track.title || "track"}`);
-              return buf;
-            }
-            log("⚠ pas de musique trouvée — pub sans musique");
-            return null;
-          })
-          .catch(e => { log(`⚠ musique: ${e.message}`); return null; })
-      : Promise.resolve(null);
+    let musicPromise;
+    if (state.uploadedMusic) {
+      log(`✓ musique uploadée: ${state.uploadedMusic.name}`);
+      musicPromise = Promise.resolve(state.uploadedMusic.buf);
+    } else if (musicQuery) {
+      musicPromise = pixabayMusicSearch(musicQuery, { minDur: totalDuration, maxDur: 90 })
+        .then(async track => {
+          if (track && track.audio) {
+            const buf = await fetchAsBuffer(track.audio);
+            log(`✓ musique: ${track.title || "track"}`);
+            return buf;
+          }
+          log("⚠ Pixabay music API indisponible — uploade ta propre musique");
+          return null;
+        })
+        .catch(e => { log(`⚠ musique: ${e.message}`); return null; });
+    } else {
+      musicPromise = Promise.resolve(null);
+    }
 
     const [narrationBuf, musicBuf] = await Promise.all([ttsPromise, musicPromise]);
 
@@ -782,7 +815,8 @@ async function generate() {
       totalDuration,
       preset,
       onLog: m => log(m),
-      onLoadProgress: p => setProgress(40 + Math.round(p * 20), `📥 Téléchargement ffmpeg.wasm… ${(p * 100).toFixed(0)}%`)
+      onLoadProgress: p => setProgress(40 + Math.round(p * 20), `📥 Téléchargement ffmpeg.wasm… ${(p * 100).toFixed(0)}%`),
+      onStageProgress: (label, frac) => setProgress(Math.round(frac * 100), `🎬 ${label}`)
     });
 
     setProgress(100, "✅ Terminé !");
@@ -814,7 +848,43 @@ function setProgress(pct, text) {
   $("#progress-text").textContent = text;
 }
 
+// Filter ffmpeg.wasm log noise that confuses users into thinking encoding failed.
+// "Aborted()" is the normal wasm exit signal between exec() calls (not an error).
+// "deprecated pixel format" + libx264 stats blocks are spammy but harmless.
+const LOG_NOISE = [
+  /^\s*$/,
+  /deprecated pixel format/,
+  /^\s*\[swscaler /,
+  /^\s*\[libx264.*using cpu capabilities/,
+  /^\s*\[libx264.*264 - core /,
+  /^\s*\[libx264 @.*\] (frame [IPB]:|consecutive B-frames|mb [IPB]|coded y,uvDC|i16 |i4 |i8c |Weighted P-Frames|ref [PB] L|kb\/s:|final ratefactor|profile [A-Z])/,
+  /^\s*Aborted\(\)\s*$/,
+  /^ffmpeg version 5/,
+  /^\s*built with emcc/,
+  /^\s*configuration: /,
+  /^\s*libav(util|codec|format|device|filter)\s/,
+  /^\s*libsw(scale|resample)\s/,
+  /^\s*libpostproc\s/,
+  /^\s*Stream mapping:/,
+  /^\s*Stream #0:0 \(mjpeg\) ->/,
+  /^\s*Stream #1:0 \(png\) ->/,
+  /^\s*(eq|scale|overlay|format):default ->/,
+  /^Input #\d, /,
+  /^\s*Duration: /,
+  /^\s*Stream #\d:\d: /,
+  /^Output #\d, /,
+  /^\s*Metadata:/,
+  /^\s*encoder\s+:/,
+  /^\s*Side data:/,
+  /^\s*cpb: /,
+  /^\s*video:\d+kB audio:/,
+  /^progress: /,
+  /^\s*frame=\s*\d+ fps=/
+];
+
 function log(msg) {
+  if (typeof msg !== "string") msg = String(msg);
+  for (const rx of LOG_NOISE) if (rx.test(msg)) return;
   const el = $("#progress-log");
   el.textContent += `${msg}\n`;
   el.scrollTop = el.scrollHeight;

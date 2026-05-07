@@ -258,14 +258,24 @@ Ligne 2 = scène 2
       <h2><span class="step-num">5</span> Audio</h2>
       <div class="row">
         <div class="col">
-          <label>Voix off (ElevenLabs)</label>
+          <label>Voix off (ElevenLabs) <small style="color:var(--muted);font-weight:400">— free tier: clone ta voix dans ton compte</small></label>
           <select id="voice-id">
-            <option value="JBFqnCBsd6RMkjVDRZzb">George — masc grave</option>
-            <option value="21m00Tcm4TlvDq8ikWAM">Rachel — fém claire</option>
-            <option value="pNInz6obpgDQGcFmaJgB">Adam — masc neutre</option>
-            <option value="EXAVITQu4vr4xnSDxMaL">Sarah — fém douce</option>
+            <option value="JBFqnCBsd6RMkjVDRZzb">George — masc grave (payant)</option>
+            <option value="21m00Tcm4TlvDq8ikWAM">Rachel — fém claire (payant)</option>
+            <option value="pNInz6obpgDQGcFmaJgB">Adam — masc neutre (payant)</option>
+            <option value="EXAVITQu4vr4xnSDxMaL">Sarah — fém douce (payant)</option>
+            <option value="custom">🎤 Voix custom (ton ID ElevenLabs)</option>
+            <optgroup label="OpenAI TTS (utilise ta clé OpenAI)">
+              <option value="openai:alloy">OpenAI alloy — neutre</option>
+              <option value="openai:echo">OpenAI echo — masc posé</option>
+              <option value="openai:onyx">OpenAI onyx — masc grave</option>
+              <option value="openai:nova">OpenAI nova — fém claire</option>
+              <option value="openai:shimmer">OpenAI shimmer — fém douce</option>
+              <option value="openai:fable">OpenAI fable — narratif</option>
+            </optgroup>
             <option value="">— Aucune (pas de narration)</option>
           </select>
+          <input id="voice-custom-id" placeholder="ID voix ElevenLabs (ex: 4VZIsMPtgggwNg7OXbPY)" style="margin-top:6px;display:none">
         </div>
         <div class="col">
           <label>Style voix</label>
@@ -276,7 +286,10 @@ Ligne 2 = scène 2
           </select>
         </div>
       </div>
-      <label>Recherche musique (Pixabay)</label>
+      <label>Musique — option 1 : upload</label>
+      <input id="music-upload" type="file" accept="audio/*">
+      <small id="music-upload-info" class="muted"></small>
+      <label style="margin-top:12px">Musique — option 2 : recherche Pixabay <small style="color:var(--muted);font-weight:400">(API publique limitée, peut échouer)</small></label>
       <input id="music-query" placeholder="ex: phonk dark gym  ·  cinematic dark slow build  ·  upbeat corporate">
     </div>
 

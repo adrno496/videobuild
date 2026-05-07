@@ -238,9 +238,12 @@ export async function compose({
   totalDuration,
   preset = { videoBitrate: "8M", audioBitrate: "192k", profile: "main", fps: 30 },
   onLog,
-  onLoadProgress
+  onLoadProgress,
+  onStageProgress
 }) {
   const ff = await loadFFmpeg(onLog, onLoadProgress);
+  const totalScenes = scenes.length;
+  const stage = (label, frac) => onStageProgress && onStageProgress(label, frac);
   const [W, H] = dimsForFormat(format);
   const FPS = preset.fps || 30;
 
@@ -285,7 +288,8 @@ export async function compose({
       args.push("-filter_complex", filter, "-c:v", "libx264", "-profile:v", preset.profile || "main", "-b:v", preset.videoBitrate || "8M", "-pix_fmt", "yuv420p", "-r", String(FPS), "-t", String(dur), outName);
     }
 
-    if (onLog) onLog(`▶ scene ${idx}: ${s.visualType}, ${dur}s`);
+    if (onLog) onLog(`▶ scène ${idx}/${totalScenes}: ${s.visualType}, ${dur.toFixed(1)}s`);
+    stage(`Scène ${i + 1}/${totalScenes}`, 0.6 + 0.3 * (i / totalScenes));
     await ff.exec(args);
     clipFiles.push(outName);
   }
@@ -294,6 +298,7 @@ export async function compose({
   const concatTxt = clipFiles.map(f => `file '${f}'`).join("\n");
   await ff.writeFile("concat.txt", new TextEncoder().encode(concatTxt));
   if (onLog) onLog("▶ concat clips");
+  stage("Concat", 0.92);
   await ff.exec(["-f", "concat", "-safe", "0", "-i", "concat.txt", "-c", "copy", "video_only.mp4"]);
 
   // Audio mix
@@ -342,6 +347,7 @@ export async function compose({
 
   // Final mux
   if (onLog) onLog("▶ final mux");
+  stage("Final mux", 0.97);
   if (hasAudio) {
     await ff.exec(["-i", "video_only.mp4", "-i", "audio.m4a", "-c:v", "copy", "-c:a", "copy", "-shortest", "final.mp4"]);
   } else {
